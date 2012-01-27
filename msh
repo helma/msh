@@ -1,0 +1,180 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'fileutils'
+require 'mail'
+require 'nokogiri'
+require "notmuch"
+require 'yaml'
+require 'colorize'
+
+MAILDIR   = File.join ENV['HOME'], "mail"
+DOWNLOAD  = File.join ENV['HOME'], "Downloads"
+
+CACHE = "#{ENV["HOME"]}/.msh"
+FOLDER = File.join CACHE, "folder"
+ID = File.join CACHE, "id"
+INDEX = File.join CACHE, "index.yaml"
+MESSAGE = File.join CACHE, "message"
+
+class String
+  def utf8
+    self.encode("UTF-8", {:invalid => :replace, :undef => :replace})
+  end
+end
+
+class Msh
+
+  attr_accessor :db
+
+  def initialize 
+    @folder = File.read(FOLDER).chomp
+    @id = File.read(ID).chomp.to_i
+    @index = YAML.load_file INDEX
+    `notmuch new`
+  end
+
+  def folders
+    puts Dir[File.join MAILDIR, "*"].collect{|d| File.basename(d)}.join("\n")
+  end
+
+  def cd(folder="INBOX")
+    @folder = folder
+    search "folder:#{folder}"
+  end
+
+  def ls
+    @index.each do |m|
+      text = "%-5s%-22s%-25.25s    " % [@index.index(m),m[:date] ,m[:from]]
+      text += m[:subject] # allow '%' in subject
+      if @index.index(m) == @id
+        puts text.yellow
+      else
+        puts text
+      end
+    end
+  end
+
+  def search(query)
+    db = Notmuch::Database.open("/home/ch/mail",{:mode => Notmuch::MODE_READ_WRITE})
+    @index = db.query(query).search_messages.sort_by{|m| [m.thread_id,m.date]}.collect do |m|
+      { :file => m.filename.utf8, 
+        :id => m.message_id.utf8,
+        :to => m["To"].utf8,
+        :date => Time.at(m.date).strftime("%a, %d %b %H:%M").utf8, 
+        :from => m["From"].utf8, 
+        :cc => m["Cc"].utf8, 
+        :subject => m["Subject"].utf8 }
+      end
+    @id = 0
+    db.close
+    save
+    ls
+  end
+
+  def view(id=nil)
+    select id
+    mail = @index[@id]
+    puts mail[:file]
+    puts "From: ".green + mail[:from]
+    puts "To: ".green + mail[:to]
+    puts "Cc: ".green + mail[:cc]
+    puts "Subject: ".green + mail[:subject].yellow + "\n\n"
+    puts `notmuch show id:'#{@index[@id][:id]}' | sed -e '0,/body{/d;/body}/,$d;/part{/d;/part}/d;/attachment{/d;/attachment}/d' `.utf8
+    Mail.read(@index[@id][:file]).parts.each { |part| puts puts Nokogiri::HTML(part.decode_body).text if part.content_type.match(/html/) }
+  end
+
+  def cp(folder,id=nil)
+    select id 
+    FileUtils.cp @index[@id][:file], @index[@id][:file].sub(/#{@folder}/,folder)
+    `notmuch new`
+  end
+
+  def mv(folder,*ids)
+    ids = [@id] if ids.empty?
+    next_message = @index[@id+1]
+    ids.collect{|id| @index[id.to_i]}.each do |m|
+      FileUtils.move m[:file], m[:file].sub(/#{@folder}/,folder) 
+      @index.delete m
+    end
+    @id = 0 unless @index[@id]
+    save
+    ls
+  end
+
+  def purge
+    index = @index
+    id = @id
+    cd "Trash"
+    ls
+    puts "Delete Trash (y/n)?"
+    @index.each { |f| File.delete f[:file] } if gets.match(/y/i)
+    @index = index
+    @id = id
+    save
+  end
+
+  def detach(id=nil)
+    mail = Mail.read @index[@id][:file]
+    if mail.multipart?
+      mail.parts.each do |part|
+        if part.content_type_parameters['name']
+          file = File.join(DOWNLOAD,part.content_type_parameters['name'])
+        else
+          file = File.join(DOWNLOAD,"mail_download")
+        end
+        n = 0
+        while File.exists?(file) 
+          n += 1; file = "#{file}.#{n}" 
+        end
+        unless part.multipart? or part.content_type.match(/plain|html/) 
+          File.open(file,"w+" ) {|f| f.puts part.decode_body}
+          p file
+        end
+      end
+    end
+  end
+
+  def attach(file)
+    mail = Mail.read_from_string(File.read MESSAGE)
+    mail.add_file file
+    File.open(MESSAGE,"w+"){|f| f.puts mail.to_s}
+    `sed -i '/^To:/a\Bcc: helma@in-silico.ch' #{MESSAGE}` # reinsert Bcc: line (seems to be dropped by Mail)
+  end
+
+  def send
+    File.open(File.join(CACHE,"send.err"), "a+"){|f| f.puts File.join(CACHE,"sent",`date`.chomp.gsub(/ /,'-')) }
+    puts `ssmtp -t < #{MESSAGE} || echo "Mail not delivered!"|dmenu &`
+  end
+
+  def compose
+    File.open(MESSAGE,"w+"){|f| f.puts "To: \nBcc: helma@in-silico.ch\nSubject: \n\n\n"}
+    edit
+  end
+
+  def reply(id=nil)
+    select id
+    File.open(MESSAGE,"w+"){|f| f.puts `notmuch reply id:#{@index[@id][:id]} | sed '/^To:/a\Bcc: helma@in-silico.ch'` }
+    edit
+  end
+
+  private
+
+  def save
+    File.open(INDEX,'w+'){|f| f.print @index.to_yaml}
+    File.open(ID,'w+'){|f| f.print @id}
+    File.open(FOLDER,'w+'){|f| f.print @folder}
+  end
+
+  def select(id)
+    @id = id.to_i if id and !id.empty?
+    save
+  end
+
+  def edit
+    Process.spawn "xterm -e \"vim -f -c 'set filetype=mail' -c 'set spell' -c 'map s :w<CR>:! msh send<CR>:q<CR>' #{MESSAGE}\" " 
+  end
+
+end
+
+eval "Msh.new.#{ARGV.shift}(#{ARGV.collect{|a| "\"#{a}\""}.join(',')})" 
