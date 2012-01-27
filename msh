@@ -130,6 +130,7 @@ class Msh
         unless part.multipart? or part.content_type.match(/plain|html/) 
           File.open(file,"w+" ) {|f| f.puts part.decode_body}
           p file
+          #`echo -n #{file} | xclip &`
         end
       end
     end
@@ -139,7 +140,7 @@ class Msh
     mail = Mail.read_from_string(File.read MESSAGE)
     mail.add_file file
     File.open(MESSAGE,"w+"){|f| f.puts mail.to_s}
-    `sed -i '/^To:/a\Bcc: helma@in-silico.ch' #{MESSAGE}` # reinsert Bcc: line (seems to be dropped by Mail)
+    `sed -i '/^Message-ID:/i\Bcc: helma@in-silico.ch' #{MESSAGE}` # reinsert Bcc: line (seems to be dropped by Mail)
   end
 
   def send
