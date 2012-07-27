@@ -17,6 +17,7 @@ ID = File.join CACHE, "id"
 INDEX = File.join CACHE, "index.yaml"
 MESSAGE = File.join CACHE, "message"
 
+
 class String
   def utf8
     self.encode("UTF-8", {:invalid => :replace, :undef => :replace})
@@ -48,9 +49,9 @@ class Msh
       text = "%-5s%-22s%-25.25s    " % [@index.index(m),m[:date] ,m[:from]]
       text += m[:subject] # allow '%' in subject
       if @index.index(m) == @id
-        puts text.yellow
+        puts text.yellow.swap
       else
-        puts text
+        @index.index(m).modulo(2) == 1 ?  puts(text) : puts(text.light_yellow)
       end
     end
   end
@@ -64,7 +65,8 @@ class Msh
         :date => Time.at(m.date).strftime("%a, %d %b %H:%M").utf8, 
         :from => m["From"].utf8, 
         :cc => m["Cc"].utf8, 
-        :subject => m["Subject"].utf8 }
+        :subject => m["Subject"].utf8,
+      }
       end
     @id = 0
     db.close
@@ -80,8 +82,8 @@ class Msh
     puts "To: ".green + mail[:to]
     puts "Cc: ".green + mail[:cc]
     puts "Subject: ".green + mail[:subject].yellow + "\n\n"
-    puts `notmuch show id:'#{@index[@id][:id]}' | sed -e '0,/body{/d;/body}/,$d;/part{/d;/part}/d;/attachment{/d;/attachment}/d' `.utf8
-    Mail.read(@index[@id][:file]).parts.each { |part| puts puts Nokogiri::HTML(part.decode_body).text if part.content_type.match(/html/) }
+    #puts `notmuch show id:'#{@index[@id][:id]}'`#| sed -e '0,/body{/d;/body}/,$d;/part{/d;/part}/d;/attachment{/d;/attachment}/d' `.utf8
+    puts body
   end
 
   def cp(folder,id=nil)
@@ -116,22 +118,12 @@ class Msh
 
   def detach(id=nil)
     mail = Mail.read @index[@id][:file]
-    if mail.multipart?
-      mail.parts.each do |part|
-        if part.content_type_parameters['name']
-          file = File.join(DOWNLOAD,part.content_type_parameters['name'])
-        else
-          file = File.join(DOWNLOAD,"mail_download")
-        end
-        n = 0
-        while File.exists?(file) 
-          n += 1; file = "#{file}.#{n}" 
-        end
-        unless part.multipart? or part.content_type.match(/plain|html/) 
-          File.open(file,"w+" ) {|f| f.puts part.decode_body}
-          p file
-          #`echo -n #{file} | xclip &`
-        end
+    mail.attachments.each do |attachment|
+      unless attachment.content_type.match(/plain|html/)
+        file = File.join DOWNLOAD,  attachment.filename
+        `mv #{file} #{file}~` if File.exists?(file) 
+        File.open(file, "w+") {|f| f.write attachment.body.decoded}
+        puts file
       end
     end
   end
@@ -155,11 +147,37 @@ class Msh
 
   def reply(id=nil)
     select id
-    File.open(MESSAGE,"w+"){|f| f.puts `notmuch reply id:#{@index[@id][:id]} | sed '/^To:/a\Bcc: helma@in-silico.ch'` }
+    File.open(MESSAGE,"w+") do |f|
+      #f.puts `notmuch reply id:#{@index[@id][:id]}`# | sed '/^To:/a\Bcc: helma@in-silico.ch'` }
+      mail = @index[@id]
+      f.puts "From: helma@in-silico.ch"
+      f.puts "To: " + mail[:from]
+      cc = mail[:to].split(",").collect{|a| a unless a.match(/helma@in-silico.ch/)}.compact.join(",") + mail[:cc]
+      f.puts "Cc: " + cc unless cc.empty?
+      f.puts "Bcc: helma@in-silico.ch"
+      f.puts "In-Reply-To: <" + mail[:id] +">"
+      f.puts "Subject: Re: " + mail[:subject] + "\n\n"
+      f.puts body.gsub(/^(.*)$/,'> \1')
+    end
     edit
   end
 
   private
+
+  def body 
+    m = Mail.read(@index[@id][:file])
+    if m.multipart?
+      body = m.text_part.body.decoded
+    elsif m.body.decoded.match(/^<html>/) 
+      body = Nokogiri::HTML(m.body.decoded).text 
+    else
+      body = m.body.decoded
+    end
+    m.attachments.each do |attachment|
+      body += attachment.filename + ", " + attachment.content_type + "\n"
+    end
+    body.force_encoding('iso-8859-1').encode('utf-8')
+  end
 
   def save
     File.open(INDEX,'w+'){|f| f.print @index.to_yaml}
