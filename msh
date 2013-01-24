@@ -121,9 +121,11 @@ class Msh
     mail.attachments.each do |attachment|
       unless attachment.content_type.match(/plain|html/)
         file = File.join DOWNLOAD,  attachment.filename
-        `mv #{file} #{file}~` if File.exists?(file) 
+        `mv "#{file}" "#{file}~"` if File.exists?(file) 
         File.open(file, "w+") {|f| f.write attachment.body.decoded}
         puts file
+        `llpp "#{file}"` if file =~ /pdf$/
+        `catdoc "#{file}"` if file =~ /doc$/
       end
     end
   end
@@ -137,7 +139,7 @@ class Msh
 
   def send
     File.open(File.join(CACHE,"send.err"), "a+"){|f| f.puts File.join(CACHE,"sent",`date`.chomp.gsub(/ /,'-')) }
-    puts `ssmtp -t < #{MESSAGE} || echo "Mail not delivered!"|dmenu &`
+    puts `/usr/sbin/ssmtp -t < #{MESSAGE} || echo "Mail not delivered!"|dmenu &`
   end
 
   def compose
@@ -162,21 +164,44 @@ class Msh
     edit
   end
 
+  def batch recipients, text, attachment
+    addresses = []
+    sent = File.read("#{recipients}.sent").split("\n")
+    File.open(recipients).each_line { |l| addresses << l.scan(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,4}\b/i) }
+    File.open(MESSAGE,"w+") do |f|
+      f.puts "From: helma@in-silico.ch"
+      f.puts "To: TMP" 
+      f.puts File.read(text)
+    end
+    attach attachment
+    addresses.flatten.uniq.compact.each do |adr|
+      unless sent.include? adr
+        `sed -i 's/^To: \.*/To: #{adr}/' #{MESSAGE}`
+        if system "ssmtp -t < #{MESSAGE}"
+          File.open("#{recipients}.sent","a+"){|f| f.puts adr}
+          puts "Sent to #{adr}"
+        else
+          puts "Could not send to #{adr}"
+        end
+      end
+    end
+  end
+
   private
 
   def body 
     m = Mail.read(@index[@id][:file])
     if m.multipart?
-      body = m.text_part.body.decoded
+      m.text_part ? body = m.text_part.body.decoded.force_encoding('iso-8859-1').encode('utf-8') : body = Nokogiri::HTML(m.html_part.body.decoded).text
     elsif m.body.decoded.match(/^<html>/) 
       body = Nokogiri::HTML(m.body.decoded).text 
     else
-      body = m.body.decoded
+      body = m.body.decoded.force_encoding('iso-8859-1').encode('utf-8')
     end
     m.attachments.each do |attachment|
       body += attachment.filename + ", " + attachment.content_type + "\n"
     end
-    body.force_encoding('iso-8859-1').encode('utf-8')
+    body.gsub(/\r/,'')
   end
 
   def save
