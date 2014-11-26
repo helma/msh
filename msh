@@ -9,7 +9,7 @@ require 'yaml'
 require 'colorize'
 
 MAILDIR   = File.join ENV['HOME'], "mail"
-DOWNLOAD  = File.join ENV['HOME'], "Downloads"
+DOWNLOAD  = File.join ENV['HOME'], "Download"
 
 CACHE = "#{ENV["HOME"]}/.msh"
 FOLDER = File.join CACHE, "folder"
@@ -32,7 +32,7 @@ class Msh
     @folder = File.read(FOLDER).chomp
     @id = File.read(ID).chomp.to_i
     @index = YAML.load_file INDEX
-    `notmuch new`
+    `/usr/bin/notmuch new`
   end
 
   def folders
@@ -82,14 +82,34 @@ class Msh
     puts "To: ".green + mail[:to]
     puts "Cc: ".green + mail[:cc]
     puts "Subject: ".green + mail[:subject].yellow + "\n\n"
-    #puts `notmuch show id:'#{@index[@id][:id]}'`#| sed -e '0,/body{/d;/body}/,$d;/part{/d;/part}/d;/attachment{/d;/attachment}/d' `.utf8
     puts body
+#    Mail.read(mail[:file]).attachments.each do |attachment|
+#      puts attachment.inspect
+#    end
+#    Mail.read(mail[:file]).attachments.each do |attachment|
+#      case attachment.content_type
+#      when %r{application/vnd.openxmlformats-officedocument.wordprocessingml.document}
+#        File.popen("docx2txt.pl - -","w") {|f| f.write attachment.body.decoded}
+#      when %r{application/msword}
+#        File.popen("catdoc -","w") {|f| f.write attachment.body.decoded}
+#      when %r{application/pdf}
+#        File.popen("pdftotext - -","w") {|f| f.write attachment.body.decoded}
+#      else
+#      end
+#    end
+  end
+
+  def to_task(id=nil)
+    select id
+    mail = @index[@id]
+    puts mail[:file]
+    `add.rb "+mail u:file://#{mail[:file]} #{mail[:from]} #{mail[:subject]}"`
   end
 
   def cp(folder,id=nil)
     select id 
     FileUtils.cp @index[@id][:file], @index[@id][:file].sub(/#{@folder}/,folder)
-    `notmuch new`
+    `/usr/bin/notmuch new`
   end
 
   def mv(folder,*ids)
@@ -119,14 +139,17 @@ class Msh
   def detach(id=nil)
     mail = Mail.read @index[@id][:file]
     mail.attachments.each do |attachment|
-      unless attachment.content_type.match(/plain|html/)
+      #unless attachment.content_type.match(/plain|html/)
         file = File.join DOWNLOAD,  attachment.filename
         `mv "#{file}" "#{file}~"` if File.exists?(file) 
         File.open(file, "w+") {|f| f.write attachment.body.decoded}
+        #`xdg-open "#{file}"` 
         puts file
-        `llpp "#{file}"` if file =~ /pdf$/
-        `catdoc "#{file}"` if file =~ /doc$/
-      end
+
+        #`llpp "#{file}"` if file =~ /pdf$/
+        #puts `docx2txt.pl "#{file}" -` if file =~ /docx/
+        #puts `catdoc "#{file}"` if file =~ /doc$/
+      #end
     end
   end
 
@@ -142,8 +165,9 @@ class Msh
     puts `/usr/sbin/ssmtp -t < #{MESSAGE} || echo "Mail not delivered!"|dmenu &`
   end
 
-  def compose
-    File.open(MESSAGE,"w+"){|f| f.puts "To: \nBcc: helma@in-silico.ch\nSubject: \n\n\n"}
+  def compose address=""
+    address = File.readlines(address).join(", ").chomp if File.exists? address
+    File.open(MESSAGE,"w+"){|f| f.puts "To: #{address}\nBcc: helma@in-silico.ch\nSubject: \n\n\n"}
     edit
   end
 
@@ -164,20 +188,21 @@ class Msh
     edit
   end
 
-  def batch recipients, text, attachment
+  def batch recipients, text, attachment=nil
     addresses = []
-    sent = File.read("#{recipients}.sent").split("\n")
+    sent = []
+    sent = File.read("#{recipients}.sent").split("\n") if File.exists?  "#{recipients}.sent"
     File.open(recipients).each_line { |l| addresses << l.scan(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,4}\b/i) }
     File.open(MESSAGE,"w+") do |f|
       f.puts "From: helma@in-silico.ch"
       f.puts "To: TMP" 
       f.puts File.read(text)
     end
-    attach attachment
+    attach attachment if attachment
     addresses.flatten.uniq.compact.each do |adr|
       unless sent.include? adr
         `sed -i 's/^To: \.*/To: #{adr}/' #{MESSAGE}`
-        if system "ssmtp -t < #{MESSAGE}"
+        if system "/usr/sbin/ssmtp -t < #{MESSAGE}"
           File.open("#{recipients}.sent","a+"){|f| f.puts adr}
           puts "Sent to #{adr}"
         else
@@ -216,7 +241,8 @@ class Msh
   end
 
   def edit
-    Process.spawn "xterm -e \"vim -f -c 'set filetype=mail' -c 'set spell' -c 'map s :w<CR>:! msh send<CR>:q<CR>' #{MESSAGE}\" " 
+    Process.spawn "urxvt -e sh -c \"vim -f -c 'set filetype=mail' -c 'set spell' -c 'map s :w<CR>:! msh send<CR>:q<CR>' #{MESSAGE}\" " 
+    #Process.spawn "xterm -e sh -c \"vim -f -c 'set filetype=mail' -c 'set spell' -c 'map s :w<CR>:! msh send<CR>:q<CR>' #{MESSAGE}\" " 
   end
 
 end
