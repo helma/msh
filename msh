@@ -241,8 +241,8 @@ class Msh
   end
 
   def edit
-    Process.spawn "urxvt -e sh -c \"vim -f -c 'set filetype=mail' -c 'set spell' -c 'map s :w<CR>:! msh send<CR>:q<CR>' #{MESSAGE}\" " 
-    #Process.spawn "xterm -e sh -c \"vim -f -c 'set filetype=mail' -c 'set spell' -c 'map s :w<CR>:! msh send<CR>:q<CR>' #{MESSAGE}\" " 
+    #Process.spawn "urxvtc -e sh -c \"vim -f -c 'set filetype=mail' -c 'set spell' -c 'map s :w<CR>:! msh send<CR>:q<CR>' #{MESSAGE}\" " 
+    Process.spawn "urxvtc -e sh -c \"vim -f -c 'set filetype=mail' -c 'set spell' -c 'map s :w<CR>:! msh send<CR>:q<CR>' #{MESSAGE}\" " 
   end
 
 end
